@@ -8,21 +8,31 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.Hashtable;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
 
 import org.eclipse.core.commands.AbstractHandler;
 import org.eclipse.core.commands.ExecutionEvent;
 import org.eclipse.core.commands.ExecutionException;
 import org.eclipse.core.resources.IResource;
+import org.eclipse.core.runtime.IPath;
+import org.eclipse.jdt.core.IJavaElement;
 import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.jface.viewers.ISelection;
 import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.swt.widgets.Display;
+import org.eclipse.team.ui.synchronize.ISynchronizeModelElement;
 import org.eclipse.ui.IWorkbenchWindow;
 import org.eclipse.ui.handlers.HandlerUtil;
 
 public class CopyResHandler extends AbstractHandler {
     
     private static final String CFG_NAME = "dr.cfg";
+    private Map<String, StringBuffer> message;
+    private List<String> cfgPaths;
 
 	public CopyResHandler() {}
 
@@ -31,44 +41,85 @@ public class CopyResHandler extends AbstractHandler {
 	            .getActiveWorkbenchWindowChecked(event);  
 	    ISelection sel = window.getSelectionService().getSelection();  
 	    if (sel instanceof IStructuredSelection) {  
-	        Object obj = ((IStructuredSelection) sel).getFirstElement();  
-	        String path = null;  
-
-	        if (obj instanceof IResource) {  
-	            path = ((IResource) obj).getLocation().toOSString();  
-	        }  
-	        if (path != null) {  
-	            try {  
-	                File selected = new File(path);
-	                File cfgFile = getCfgFile(selected);
-	                if (cfgFile == null) {
-	                    MessageDialog.openInformation(Display.getDefault().getActiveShell(), "DeployRes", "not found ["+CFG_NAME+"].");
-	                    return null;
-	                }
-	                BufferedReader br = new BufferedReader(new InputStreamReader(new FileInputStream(cfgFile)));
-                    String targetBasePath = br.readLine();
-                    br.close();
-                    if (targetBasePath == null || "".equals(targetBasePath.trim()))    return null;
-                    File desc = new File(targetBasePath + File.separator + selected.getPath().replace(cfgFile.getParent(), ""));
-                    File src = selected.equals(cfgFile) ? selected.getParentFile() : selected;
-                    File des = selected.equals(cfgFile) ? desc.getParentFile() : desc;
-                    copy(src, des);
-                    String message = "Copy\n[" + src.getPath() + "]\nto\n[" + des.getPath() + "]\n\nDone.";
-                    MessageDialog.openInformation(Display.getDefault().getActiveShell(), "DeployRes", message);
-	            } catch (Exception e) {  
-	                MessageDialog.openError(Display.getDefault().getActiveShell(), "DeployRes", e.getMessage());
-	            }  
-	        }  
-	  
+	        message = new Hashtable<>();
+            List<?> list = ((IStructuredSelection) sel).toList();
+            for (Object _sel : list) {
+                execdetail(_sel);
+            }
+            Iterator<String> iter = message.keySet().iterator();
+            String msg = "";
+            while (iter.hasNext()) {
+                String _str = iter.next();
+                msg += ("[" + _str + "]:\n" + message.get(_str).toString() + "\n");
+            }
+            MessageDialog.openInformation(Display.getDefault().getActiveShell(), "ArcUtil", !"".equals(msg) ? msg : "none.");
 	    }  
 	    return null;  
 	}  
 	
+	private void execdetail(Object obj) {
+	    String path = null;
+	    IResource res = null;
+	    if (obj instanceof IResource) {
+	        res = ((IResource) obj);
+        } else if (obj instanceof IJavaElement) {
+            res = ((IJavaElement) obj).getResource();
+        } else if (obj instanceof ISynchronizeModelElement) {
+            res = ((ISynchronizeModelElement) obj).getResource();
+        } else {
+            return;
+        } 
+	    IPath iPath = res == null ? null : res.getLocation();
+        if (iPath != null && (path = iPath.toOSString()) != null) {  
+            String project = res.getProject().getName();
+            StringBuffer _message = null;
+            if (!message.containsKey(project)) {
+                _message = new StringBuffer();
+                message.put(project, _message);
+            } else {
+                _message = message.get(project);
+            }
+            String _path =  res.getProjectRelativePath().toOSString();
+            try {  
+                File selected = new File(path);
+                File cfgFile = getCfgFile(selected);
+                if (cfgFile == null) {
+                    _message.append(_path + "   -not found ["+CFG_NAME+"]\n");
+                    return;
+                }
+                BufferedReader br = new BufferedReader(new InputStreamReader(new FileInputStream(cfgFile)));
+                String targetBasePath = br.readLine();
+                br.close();
+                if (targetBasePath == null || "".equals(targetBasePath.trim())) {
+                    _message.append(_path + "   -cfg invalid ["+CFG_NAME+"]\n");
+                    return;
+                }
+                File desc = new File(targetBasePath + File.separator + selected.getPath().replace(cfgFile.getParent(), ""));
+                File src = selected.equals(cfgFile) ? selected.getParentFile() : selected;
+                File des = selected.equals(cfgFile) ? desc.getParentFile() : desc;
+                copy(src, des);
+                _message.append(_path + "   -done.\n");
+            } catch (Exception e) {  
+                MessageDialog.openError(Display.getDefault().getActiveShell(), "DeployRes", e.getMessage());
+            }  
+        }
+	}
+	
 	private File getCfgFile(File selected) {
 	    if (selected == null || !selected.exists())    return null;
+	    if (cfgPaths != null) {
+	        String _path = selected.getPath();
+	        for (String cfgPath : cfgPaths) {
+	            if (_path.startsWith(cfgPath)) return new File(cfgPath);
+	        }
+	    }
 	    if (selected.isDirectory()) {
 	        File cfgFile = new File(selected.getPath() + File.separator + CFG_NAME);
 	        if (cfgFile.exists()) {
+	            if (cfgPaths == null) {
+	                cfgPaths = new ArrayList<>();
+	            }
+	            cfgPaths.add(cfgFile.getPath());
 	            return cfgFile;
 	        } else {
 	            return getCfgFile(selected.getParentFile());
